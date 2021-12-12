@@ -1,0 +1,1099 @@
+---
+title: " Development and Validation of Prediction Model for Major Adverse Cardiac Events in Patients with Chronic Inflammatory Skin Diseases Undergoing Major Surgical"
+authors: "Michelle Sodipo, MS, Zach Feldman, MD MS, Denys Shay, MD, Rodrigo Bazua, MD"
+output: html_document
+---
+
+```{r setup, include=FALSE, warnings = FALSE, messages = FALSE}
+knitr::opts_chunk$set(echo = TRUE, fig.width=6, fig.height=5, message = FALSE, warning = FALSE)
+```
+
+
+```{r, echo = FALSE}
+library(ggplot2)
+library(ggthemes)
+library(rstudioapi)
+library(broom)
+library(readr)
+library(tidyverse)
+library(splines2)
+library(gam)
+library(foreign)
+library(Hmisc)
+library(haven)
+library(gtools)
+library(splitstackshape)
+library(ResourceSelection)
+library(LogisticDx)
+library(ROCR)
+library(knitr)
+library(nnet)
+library(VGAM)
+library(survival)
+library(survminer)
+library(gridExtra)
+library(dplyr)
+library(plyr)
+library(splitstackshape)
+library(caret)
+library(e1071)
+library(pROC)
+library(MASS)
+library(rpart)
+library(randomForest)
+library(betareg)
+library(Hmisc)
+library(haven)
+
+```
+
+Reading in the data from MIMIC-IV (*accessible here: https://mimic.mit.edu/docs/iv/*), containing:
+
+1. Patient-level data from 2008-2019 for hospitalized patients at the Beth Israel Deaconess Medical Center
+2. Hospital admission-level data from the same period and hospital
+3. Diagnoses assigned to the patients admitted from the same period and hospital
+
+We will be accessed the MIMIC-IV Data set. The MIMIC-IV dataset consists of free and comprehensive clinical data on hospital stays for patients admitted to Beth Israel Deaconess Medical Center (BIDMC) in Boston, MA. In order to attain access to the data, all team members conducted CITI training in order to become credentialed users on PhysioNet, signed the data use agreement (DUA), and followed tutorials for direct cloud access and download the data locally from the aforementioned website. 
+
+
+```{r}
+patients <- read_csv("patients.csv")
+admissions <- read_csv("admissions.csv")
+diagnoses_icd <- read_csv("diagnoses_icd.csv")
+```
+
+<br>
+
+Using the following diagnosis codes (both ICD-9 and ICD-10), we define a variable for whether a code refers to one of our inclusion criteria:
+ hidradenitis suppurativa: 70583,  L73.2
+ psoriasis: 6960, 6961,6962, 696.8, L.40.x, L.40.5x
+ atopic dermatitis: 6910, 6918, L20.x, L20.8x
+ alopecia areata: 70400, 70401, L63.x
+ vitiligo: 70901, L80
+
+```{r}
+dermlist <- c("70583","L732","6960","6961","6962","6968","L40.","L405","6910","6918","L20.","L208","70400","70401","L63.","70901","L80.","70583","L732","6960","6961","6962","6968","L40","L405","6910","6918","L20","L208","70400","70401","L63","70901","L80")
+hidlist <- c("70583","L732")
+psorlist <- c("6960","6961","6962","6968","L40.","L405","L40")
+atoplist <- c("6910","6918","L20.","L208","L20")
+aloplist <- c("70400","70401","L63")
+vitlist <- c("70901","L80")
+```
+
+<br>
+
+
+Next, we define variables for key clinical covariates (components of the Charlson Comorbidity Index), similarly using ICD-9 and ICD-10 codes. *(See Charlson M et al. Validation of a combined comorbidity index. J Clin Epi 1994)*
+
+```{r}
+milist<-c("I21.","I22.","I252.","410.","412.","I21","I22","I252","410","412")
+chflist<-c("I099","I110","I130","I132","I255","I420","I425","I426","I427","I428","I429","I43.","I50.","P290","39891","40201","40211","40291","40401","40403","40411","40413","40491","40493","4254","4255","4256","4257","4258","4259","428")
+hivlist<-c("042.","044.","B20.","B22.","B24.","042","044","B20","B22","B24")
+pvdlist<-c("I70.","I71.","I731","I738","I739","I771","I790","I792","K551","K558","K559","Z958","Z959","0930","4373","440.","441.","443.","4471","5571","5579","V434","I70","I71","I731","I738","I739","I771","I790","I792","K551","K558","K559","Z958","Z959","0930","4373","440","441","443","4471","5571","5579","V434")
+cvalist <- c("G45.","G46.","H340","I60.,","I61.","I62.","I63.","I64.","I65.","I66.","I67.","I68.","I69.","36234","430.","431.","432.","433.","434.","435.","436.","437.","438.","G45","G46","H340","I60,","I61","I62","I63","I64","I65","I66","I67","I68","I69","36234","430","431","432","433","434","435","436","437","438")
+demlist <- c("F00.","F01.","F02.","F03.","F051","G30.","G311","290.","2941","3312","F00","F01","F02","F03","F051","G30","G311","290.","2941","3312")
+copdlist <- c("I278","I279","J40.","J41.","J42.","J43.","J44.","J45.","J46.","J47.","J60.","J61.","J62.","J63.","J64.","J65.","J66.","J67.","J684","J701","J703","4168","4169","490.","491.","492.","493.","494.","495.","496.","497.","498.","499.","500.","501.","502.","503.","504.","505.","5064","5081","5088","I278","I279","J40","J41","J42","J43","J44","J45","J46","J47","J60","J61","J62","J63","J64","J65","J66","J67","J684","J701","J703","4168","4169","490","491","492","493","494","495","496","497","498","499","500","501","502","503","504","505","5064","5081","5088")
+rheumlist <- c("M05.","M06.","M315","M32.","M33.","M34.","M351","M353","M360","4465","7100","7101","7102","7103","7104","7140","7141","7142","7148","725.","M05","M06","M315","M32","M33","M34","M351","M353","M360","4465","7100","7101","7102","7103","7104","7140","7141","7142","7148","725")
+pudlist <- c("K25.","K26.","K27.","K28.","531.","532.","533.","534.","K25","K26","K27","K28","531","532","533","534")
+mstlist <- c("C77.","C80.","196.","199.","C77","C80","196","199")
+livmod <- c("I850","I859","1864","I982","K704","K711","K721","K729","K765","K766","K767")
+maliglist <-c("4560","4562","5722","5728","C00.","C26.","C30.","C34.","C37.","C41.","C43.","C45.","C58.","C60.","C76.","C81.","C85.","C88.","C90.","C97.","4560","4562","5722","5728","C00","C26","C30","C34","C37","C41","C43","C45","C58","C60","C76","C81","C85","C88","C90","C97")
+renallist <-c("40301","40311","40391","40402","40403","40412","40413","40492","40493","582.","5830","5831","5832","5833","5834","5835","5836","5837","585.","586.","5880","V420","V451","V56.","I120","I131","N032","N033","N034","N035","N036","N037","N052","N053","N054","N055","N056","N057","N18.","N19.","N250","Z490","Z491","Z492","Z940","Z992","40301","40311","40391","40402","40403","40412","40413","40492","40493","582","5830","5831","5832","5833","5834","5835","5836","5837","585","586","5880","V420","V451","V56","I120","I131","N032","N033","N034","N035","N036","N037","N052","N053","N054","N055","N056","N057","N18","N19","N250","Z490","Z491","Z492","Z940","Z992")
+mildlivlist<-c("B18.","K700","K701","K702","K703","K709","K713","K714","K715","K717","K73.","K74.","K760","K762","K763","K764","K768","K769","Z944","07022","07023","07032","07033","07044","07054","0706","0709","570.","571.","5733","5734","5738","5739","V427","B18","K700","K701","K702","K703","K709","K713","K714","K715","K717","K73","K74","K760","K762","K763","K764","K768","K769","Z944","07022","07023","07032","07033","07044","07054","0706","0709","570","571","5733","5734","5738","5739","V427")
+pleglist<-c("3341","342.","343.","3440","3441","3442","3443","3444","3445","3446","3449","G041","G114","G801","G802","G81x","G82.","G830","G831","G832","G833","G834","G839","3341","342","343","3440","3441","3442","3443","3444","3445","3446","3449","G041","G114","G801","G802","G81x","G82.","G830","G831","G832","G833","G834","G839")
+dmcomplist<-c("2504","2505","2506","2507","E102","E103","E104","E105","E107","E112","E113","E114","E115","E117","E122","E123","E124","E125","E127","E132","E133","E134","E135","E137","E142","E143","E144","E145","E147")
+dmlist<-c("2500","2501","2502","2503","2508","2509","E100","E101","E106","E108","E109","E110","E111","E116","E118","E119","E120","E121","E126","E128","E129","E130","E131","E136","E138","E139","E140","E141","E146","E148","E149")
+```
+
+<br>
+
+Now, we will define variables for the subcomponents of Major Adverse Cardiac Events (MACE), and a total MACE variable as well:
+
+```{r}
+mace_MIlist<-c("41000","41001","41002","41010","41010","41011","41012","41020","41021","41022","41030","41031","41032","41040","41041","41042","41050","41051","41052","41060","41061","41062","41070","41071","41072","41080","41081","41082","41090","41091","41092","I20.","I21.","I22.","I20","I21","I22")
+
+mace_cardiacarrestlist<-c("4275","I46.","I46")
+
+mace_ahflist<-c("4280","4281","42820","42821","42823","42830","42831","42833","42840","42841","42843","4289","4280","4281","42820","42821","42823","42830","42831","42833","42840","42841","42843","4289","4280","4281","42820","42821","42823","42830","42831","42833","42840","42841","42843","4289","I509.","I501.","I5020.","I5021.","I5023.","I5030.","I5031.","I5033.","I5040.","I5041.","I5043.","I509.","I509","I501","I5020","I5021","I5023","I5030","I5031","I5033","I5040","I5041","I5043","I509")
+
+macelist <- c("41000","41001","41002","41010","41010","41011","41012","41020","41021","41022","41030","41031","41032","41040","41041","41042","41050","41051","41052","41060","41061","41062","41070","41071","41072","41080","41081","41082","41090","41091","41092","I20.","I21.","I22.","I20","I21","I22","4275","I46.","I46","4280","4281","42820","42821","42823","42830","42831","42833","42840","42841","42843","4289","4280","4281","42820","42821","42823","42830","42831","42833","42840","42841","42843","4289","4280","4281","42820","42821","42823","42830","42831","42833","42840","42841","42843","4289","I509.","I501.","I5020.","I5021.","I5023.","I5030.","I5031.","I5033.","I5040.","I5041.","I5043.","I509.","I509","I501","I5020","I5021","I5023","I5030","I5031","I5033","I5040","I5041","I5043","I509")
+```
+
+
+<br>
+
+Now we will create the variables in our diagnosis codes file to assign a covariate/outcome/exposure category indicator variable to each code:
+```{r}
+covaricd <- diagnoses_icd %>%
+  mutate(derm = case_when(
+    .$icd_code %in% dermlist ~ 1,
+    TRUE ~ 0),
+    mi = case_when(
+      .$icd_code %in% milist ~ 1,
+      TRUE ~ 0),
+    chf = case_when(
+      .$icd_code %in% chflist ~ 1,
+      TRUE ~ 0),
+    hiv = case_when(
+      .$icd_code %in%  hivlist ~ 1,
+      TRUE ~ 0),
+    pvd = case_when(
+      .$icd_code %in%  pvdlist ~ 1,
+      TRUE ~ 0),
+    cva = case_when(
+      .$icd_code %in%  cvalist ~ 1,
+      TRUE ~ 0),
+    copd = case_when(
+      .$icd_code %in%  copdlist ~ 1,
+      TRUE ~ 0),
+    rheum = case_when(
+      .$icd_code %in%  rheumlist ~ 1,
+      TRUE ~ 0),
+    dem = case_when(
+      .$icd_code %in%  demlist ~ 1,
+      TRUE ~ 0),
+    pud = case_when(
+      .$icd_code %in%  pudlist ~ 1,
+      TRUE ~ 0),
+    mst = case_when(
+      .$icd_code %in%  mstlist ~ 1,
+      TRUE ~ 0),
+    livmodsev = case_when(
+      .$icd_code %in%  livmod ~ 1,
+      TRUE ~ 0),
+    malig = case_when(
+      .$icd_code %in%  maliglist ~ 1,
+      TRUE ~ 0),
+    miliv = case_when(
+      .$icd_code %in%  mildlivlist ~ 1,
+      TRUE ~ 0),
+    pleg = case_when(
+      .$icd_code %in%  pleglist ~ 1,
+      TRUE ~ 0),
+    dmcomp = case_when(
+      .$icd_code %in%  dmcomplist ~ 1,
+      TRUE ~ 0),
+    dm = case_when(
+      .$icd_code %in%  dmlist ~ 1,
+      TRUE ~ 0),
+    hid= case_when(
+      .$icd_code %in%  hidlist ~ 1,
+      TRUE ~ 0),
+    psor= case_when(
+      .$icd_code %in%  psorlist ~ 1,
+      TRUE ~ 0),
+    atop= case_when(
+      .$icd_code %in%  atoplist ~ 1,
+      TRUE ~ 0),
+    alop= case_when(
+      .$icd_code %in%  aloplist ~ 1,
+      TRUE ~ 0),
+    vit= case_when(
+      .$icd_code %in%  vitlist ~ 1,
+      TRUE ~ 0),
+    mace_MI = case_when(
+      .$icd_code %in%  mace_MIlist ~ 1,
+      TRUE ~ 0),
+    mace_cardiacarrest = case_when(
+      .$icd_code %in%  mace_cardiacarrestlist ~ 1,
+      TRUE ~ 0),
+    mace_ahf = case_when(
+      .$icd_code %in%  mace_ahflist ~ 1,
+      TRUE ~ 0),
+    mace = case_when(
+      .$icd_code %in%  macelist ~ 1,
+      TRUE ~ 0))
+
+head(covaricd)
+```
+
+<br>
+
+
+Collapsing the diagnosis file by `subject_id`, to attain the presence or absence of our exposure and covariates with subjects to track across hospital admissions - - however, as the MACE outcome variables are more specific to hospitalizations (as opposed to patients), we will NOT collapse the outcome variables into this file.:
+
+```{r}
+collapse <- function(data){
+  
+  # converting to dataframe
+  data <- data.frame(data)
+  
+  # Identifying the unique individuals
+  persons <- unique(data[, "subject_id"])
+  
+  # Creating the target matrix to be filled with unique subject IDs and set of comorbidities
+  data_final <- matrix(NA, length(persons), 27)
+  colnames(data_final) <- c("subject_id", colnames(data)[6:dim(data)[2]])
+  
+  for(i in 1:length(persons)){
+    
+    print(c(i*100/length(persons)))
+    
+    # Identify each subject at a time:  
+    n = which(data[, "subject_id"] == persons[i])
+    data_temp <- data[n, ]
+    
+    
+    # Pulling in their comorbidities
+    data_final[i, 1] <- persons[i]
+    for(j in 2:dim(data_final)[2]){
+      data_final[i, j] <- ifelse(any(data_temp[, I(4 + j)] == 1), 1, 0)
+    }
+    
+    
+  }
+  
+  # Converting to dataframe
+  data_final <- data.frame(data_final)
+  
+  return(data_final)
+  
+}
+```
+
+<br>
+
+Now to remove the actual collapsed outcome (MACE) columns which we want to instead keep associated with hospital admissions (not patients):
+```{r, eval = FALSE, include = FALSE}
+subjcovar <- collapse(covaricd)
+
+subjcovarderm <- subjcovar %>%
+  select(-c("mace_MI","mace_cardiacarrest","mace_ahf","mace"))
+
+head(subjcovarderm)
+```
+
+*Note: The above code chunk we will avoid running given the computing time; instead we will load the resulting file*
+
+```{r}
+load("subjcovarderm.RData")
+```
+
+<br>
+
+Now that we have a file of `subject_id` and each patient's comorbidities, we need to create a separate file of each `hadm_id` (hospital admission ID) and each outcome:
+```{r}
+adm_collapse <- function(data){
+  
+  # converting to dataframe
+  data <- data.frame(data)
+  
+  # Identifying the unique hospitalizations
+  admits <- unique(data[, "hadm_id"])
+  
+  # Creating the target matrix to be filled with unique hospital admission IDs and set of outcomes
+  data_final <- matrix(NA, length(admits), 27)
+  colnames(data_final) <- c("hadm_id", colnames(data)[6:dim(data)[2]])
+  
+  for(i in 1:length(admits)){
+    
+    print(c(i*100/length(admits)))
+    
+    # Identify each subject at a time:  
+    n = which(data[, "hadm_id"] == admits[i])
+    data_temp <- data[n, ]
+    
+    
+    # Pulling in their comorbidities
+    data_final[i, 1] <- admits[i]
+    for(j in 2:dim(data_final)[2]){
+      data_final[i, j] <- ifelse(any(data_temp[, I(4 + j)] == 1), 1, 0)
+    }
+    
+    
+  }
+  
+  # Converting to dataframe
+  data_final <- data.frame(data_final)
+  
+  return(data_final)
+  
+}
+```
+
+<br> 
+
+
+```{r, eval = FALSE, include = FALSE}
+admmace <- adm_collapse(covaricd)
+
+
+admmaceonly <- admmace %>%
+  select(c("hadm_id", "mace_MI","mace_cardiacarrest","mace_ahf","mace"))
+
+head(admmaceonly)
+```
+
+
+<br>
+*Note: The above code chunk we will avoid running given the computing time; instead we will load the resulting file*
+```{r}
+load("admmaceonly.RData")
+```
+
+<br> 
+
+Now, using our hospital admission file as a base, we will join in the reshaped diagnoses files using `hadm_id`:
+```{r}
+admissionsmace <- left_join(admissions, admmaceonly, by = "hadm_id")
+
+head(admissionsmace)
+```
+
+
+<br>
+
+Now merging in the subject-oriented covariates file:
+```{r}
+admsubjcomplete <- left_join(admissionsmace,subjcovarderm, by = "subject_id")
+
+head(admsubjcomplete)
+dim(admsubjcomplete)
+```
+
+
+And filtering for patients with our Chronic Inflammatory Skin Diseases (CISD) variable: 
+```{r}
+dermptscomplete <- admsubjcomplete %>%
+  filter(derm == 1)
+
+head(dermptscomplete)
+dim(admsubjcomplete)
+```
+
+<br>
+
+
+Some additional variables for the patient files, including number of admissions and number of major adverse cardiac events (MACEs) per admission:
+```{r}
+# Number of admits per patient
+admsubjcomplete %>%
+  dplyr::count(subject_id, sort = TRUE)
+
+admsubjcomplete <- admsubjcomplete %>%
+  add_count(subject_id)
+
+#Creating a total number of admissions in time period variable - stays with subject throughout admissions
+admsubjcomplete <- admsubjcomplete %>%
+  mutate(numadm = n) 
+
+#Dropping n variable
+admsubjcomplete <- admsubjcomplete %>%
+  dplyr::select(-(n))
+
+head(admsubjcomplete)
+
+#Creating a MACE events per admission variable - stays with subject throughout admissions
+admsubjcomplete <- admsubjcomplete %>%
+  mutate(maceperadm = mace/numadm)
+
+
+save(admsubjcomplete, file = "admsubjcomplete.RData")
+
+load("admsubjcomplete.RData")
+
+
+```
+
+<br>
+
+
+Adding in the same additional variables for derm patients file:
+```{r}
+# Number of admits per patient
+dermptscomplete %>%
+  dplyr::count(subject_id, sort = TRUE)
+
+dermptscomplete <- dermptscomplete %>%
+  add_count(subject_id)
+
+
+#Creating a total number of admissions in time period variable - stays with subject throughout admissions
+dermptscomplete <- dermptscomplete %>%
+  mutate(numadm = n) 
+
+#Dropping n variable
+dermptscomplete <- dermptscomplete %>%
+  dplyr::select(-(n))
+
+head(dermptscomplete)
+
+
+#Creating a MACE events per admission variable - stays with subject throughout admissions
+dermptscomplete <- dermptscomplete %>%
+  mutate(maceperadm = mace/numadm)
+
+
+save(dermptscomplete, file = "dermptscomplete.RData")
+
+load("dermptscomplete.RData")
+
+
+```
+
+<br>
+
+Merging in age data from `patients` file containing demographic characteristics:
+```{r}
+#Adding an age category variable
+patients <- patients %>%
+  mutate(age_cat = NA)
+
+patients$age_cat <- NA
+patients$age_cat[patients$anchor_age>=18 & patients$anchor_age<30] <- 0
+patients$age_cat[patients$anchor_age>=30 & patients$anchor_age<40] <- 1
+patients$age_cat[patients$anchor_age>=40 & patients$anchor_age<50] <- 2
+patients$age_cat[patients$anchor_age>=50 & patients$anchor_age<60] <- 3
+patients$age_cat[patients$anchor_age>=60 & patients$anchor_age<70] <- 4
+patients$age_cat[patients$anchor_age>=80 & patients$anchor_age<90] <- 5
+patients$age_cat[patients$anchor_age>=90] <- 6
+patients$age_cat <- as.factor(patients$age_cat)
+
+dim(patients)
+
+
+
+#Merging in the age and sex data from this file into our destination files:
+dim(admsubjcomplete)
+dim(dermptscomplete)
+
+admsubjcomplete <- left_join(admsubjcomplete,patients, by = "subject_id")
+dermptscomplete <- left_join(dermptscomplete,patients, by = "subject_id")
+
+summary(dermptscomplete$age_cat)
+summary(admsubjcomplete$age_cat)
+
+#Excluding patients under age 18:
+admsubjcomplete <- admsubjcomplete %>%
+  filter(!is.na(age_cat))
+dim(admsubjcomplete)
+
+length(unique(admsubjcomplete$subject_id))
+
+
+dermptscomplete <- dermptscomplete %>%
+  filter(!is.na(age_cat))
+dim(dermptscomplete)
+
+length(unique(dermptscomplete$subject_id))
+
+save(dermptscomplete, file = "dermptscomplete.RData")
+save(admsubjcomplete, file = "admsubjcomplete.RData")
+```
+
+<br>
+
+Introducing an additional outcome variable accounting for the multiple components of the MACE outcome:
+```{r}
+# First for all patients:
+admsubjcomplete <- admsubjcomplete %>% 
+  mutate(macemulti = case_when(
+           mace_MI == 1 ~ 1,
+           mace_ahf == 1 ~ 2,
+           mace_cardiacarrest == 1 ~ 3,
+           TRUE ~ 0)
+         )
+dim(admsubjcomplete)
+table(admsubjcomplete$macemulti, admsubjcomplete$mace)
+
+# Next for the CISD patients:
+dermptscomplete <- dermptscomplete %>% 
+  mutate(macemulti = case_when(
+           mace_MI == 1 ~ 1,
+           mace_ahf == 1 ~ 2,
+           mace_cardiacarrest == 1 ~ 3,
+           TRUE ~ 0)
+         )
+dim(dermptscomplete)
+table(dermptscomplete$macemulti, dermptscomplete$mace)
+
+save(dermptscomplete, file = "dermptscomplete.RData")
+save(admsubjcomplete, file = "admsubjcomplete.RData")
+```
+
+<br>
+
+
+```{r}
+load("dermptscomplete.RData")
+load("admsubjcomplete.RData")
+
+dim(dermptscomplete)
+dim(admsubjcomplete)
+
+length(unique(dermptscomplete$subject_id))
+length(unique(admsubjcomplete$subject_id))
+
+```
+
+We have 7,399 patients in our total patients file, with 1,505 having a dermatologic condition in our category of CISD, including psoriasis, hidradenitis suppurativa, atopic dermatitis, and alopecia.
+
+<br>
+
+
+## Exploratory Data Analysis
+#### Race/Ethnicity of Study Population
+
+```{r}
+unique(dermptscomplete$ethnicity)
+race <- c("WHITE", "BLACK/AFRICAN AMERICAN", "HISPANIC/LATINO", "ASIAN", "AMERICAN INDIAN/ALASKA NATIVE", "OTHER")
+class(dermptscomplete$ethnicity)
+
+dermptscomplete %>% 
+  filter((ethnicity %in% race)) %>%
+  dplyr::count(ethnicity = factor(ethnicity)) %>%
+  mutate(pct = (prop.table(n))) %>%
+  ggplot(aes(x = ethnicity, 
+             y = pct, 
+             label =  scales::percent(pct))) +
+  geom_col(position = "dodge", 
+           stat = "identity", 
+           fill = "red4",
+           color = "black") +
+  geom_text(position = position_dodge(width = 0.9), #move to the center of bars
+            vjust = -0.1,
+            size = 2.5) +
+  scale_y_continuous(labels = scales::percent) +
+  scale_x_discrete(limits = c("AMERICAN INDIAN/ALASKA NATIVE", "ASIAN", 
+                              "OTHER", "HISPANIC/LATINO", "BLACK/AFRICAN AMERICAN", "WHITE"),
+                   labels = function(ethnicity) str_wrap(ethnicity, width = 
+                                                           10)) +
+  xlab("Race/Ethnicity") +
+  ylab("Percentages") +
+  ggtitle("Race/Ethnicity of Study Population") +
+  theme_light() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+<br>
+
+#### Admission Type & Insurance
+
+```{r}
+class(dermptscomplete$admission_type)
+dermptscomplete$admission_type <- as.factor(dermptscomplete$admission_type)
+unique(dermptscomplete$admission_type)
+
+dermptscomplete %>% 
+  ggplot(aes(admission_type, fill = insurance)) +
+  geom_bar(position = position_dodge(), color = "black") +
+  scale_x_discrete(limits = c("AMBULATORY OBSERVATION", "ELECTIVE", "DIRECT OBSERVATION", "URGENT", "SURGICAL SAME DAY ADMISSION", "DIRECT EMER.", "OBSERVATION ADMIT", "EU OBSERVATION", "EW EMER."),
+    labels = function(admission_type) str_wrap(admission_type, width = 
+                                                           15)) +
+  scale_fill_manual(values = c("rosybrown1", "indianred1", "red3")) +
+  xlab("Admission Type") +
+  ylab("Count") +
+  ggtitle("Admission Classification and Insurance Type \n in the Study Population") +
+  theme_light() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+  
+```
+
+<br>
+
+
+#### Age Distribution by Gender
+
+```{r}
+my_colors <- c("indianred1", "red4")
+
+dermptscomplete %>% 
+  ggplot(aes(gender, anchor_age, fill = gender)) +
+  geom_violin(width = 1, trim = FALSE) +
+  geom_boxplot(width = 0.1, color = "black", alpha = 0.2) +
+  scale_fill_manual(values = my_colors) +
+  xlab("Gender") +
+  ylab("Age") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),
+        legend.position = "none",
+        plot.title = element_text(size = 11)) +
+  theme_minimal() +
+  ggtitle("Age Distribution by Gender")
+```
+
+<br>
+
+
+#### MACE Outcomes by Age and Ethnicity
+
+```{r}
+
+dermptscomplete %>%
+  pivot_longer(15:41, names_to = "outcomes", values_to = "presence") %>%
+  mutate(outcomes = recode(outcomes, mace_MI = "MI", mace_cardiacarrest = "Cardiac Arrest", mace_ahf = "Acute Heart Failure")) %>%
+  filter(outcomes %in% c("MI", "Cardiac Arrest", "Acute Heart Failure"))%>%
+  filter(presence == 1) %>%
+  filter(ethnicity %in% c("AMERICAN INDIAN/ALASKA NATIVE", "ASIAN", "BLACK/AFRICAN AMERICAN", "HISPANIC/LATINO", "OTHER", "WHITE")) %>%
+  ggplot(aes(x = outcomes,
+             y = anchor_age)) +
+  geom_boxplot(aes(fill = ethnicity), width = 0.75) +
+  scale_x_discrete(limits = c("Cardiac Arrest", "MI", 
+                              "Acute Heart Failure")) +
+  xlab("Mace Outcomes") +
+  ylab("Age") +
+  ggtitle("Mace Outcomes by Age and Ethnicity \n in the Study Population") +
+  theme_light()
+  
+```
+
+<br>
+
+
+#### MACE Outcomes Count
+
+```{r}
+dermptscomplete %>%
+  pivot_longer(15:41, names_to = "outcomes", values_to = "presence") %>%
+  mutate(outcomes = recode(outcomes, mace_MI = "MI", mace_cardiacarrest = "Cardiac Arrest", mace_ahf = "Acute Heart Failure")) %>%
+  filter(outcomes %in% c("MI", "Cardiac Arrest", "Acute Heart Failure"))%>%
+  filter(presence == 1) %>%
+  group_by(outcomes) %>%
+  dplyr::summarize(total = sum(presence)) %>%
+  ggplot(aes(x = outcomes,
+             y = total,
+             label = total)) + 
+  geom_col(position = "dodge", 
+           stat = "identity", 
+           fill = "red4",
+           color = "black") +
+   geom_text(position = position_dodge(width = 0.9), #move to the center of bars
+            vjust = -0.1,
+            size = 2.5) +
+  scale_x_discrete(limits = c("Cardiac Arrest", "MI", 
+                              "Acute Heart Failure")) +
+  xlab("Mace Outcomes") +
+  ylab("Number of Mace Cases") +
+  ggtitle("Mace Outcomes in the Study Population") +
+  theme_light()
+```
+
+
+<br>
+
+
+#### MACE Type by Gender
+
+```{r}
+dermptscomplete %>%
+  pivot_longer(15:41, names_to = "outcomes", values_to = "presence") %>%
+  mutate(outcomes = recode(outcomes, mace_MI = "MI", mace_cardiacarrest = "Cardiac Arrest", mace_ahf = "Acute Heart Failure")) %>%
+  filter(outcomes %in% c("MI", "Cardiac Arrest", "Acute Heart Failure"))%>%
+  filter(presence == 1) %>%
+  group_by(outcomes, gender) %>%
+  ggplot(aes(x = outcomes)) +
+  geom_bar(aes(fill = gender), position = position_dodge(), color = "black") +
+  scale_x_discrete(limits = c("Cardiac Arrest", "MI", 
+                              "Acute Heart Failure")) +
+  scale_fill_manual(values = c("indianred1", "red3")) +
+  xlab("Mace Outcomes") +
+  ylab("Count") +
+  ggtitle("Mace Outcomes by Gender \n in the Study Population") +
+  theme_light()
+```
+
+<br>
+
+
+#### Boxplots of MACE per admission:
+
+```{r}
+admsubjcomplete %>%
+  pivot_longer(15:41, names_to = "outcomes", values_to = "presence") %>%
+  mutate(outcomes = recode(outcomes, mace_MI = "MI", mace_cardiacarrest = "Cardiac Arrest", mace_ahf = "Acute Heart Failure")) %>%
+  filter(outcomes %in% c("MI", "Cardiac Arrest", "Acute Heart Failure"))%>%
+  filter(presence == 1) %>%
+  ggplot(aes(x = outcomes,
+             y = anchor_age)) +
+  geom_boxplot(aes(fill = ethnicity), width = 0.75) +
+  scale_x_discrete(limits = c("Cardiac Arrest", "MI", 
+                              "Acute Heart Failure")) +
+  xlab("Mace Outcomes") +
+  ylab("Age") +
+  ggtitle("Mace Outcomes by Age and Ethnicity \n in the Study Population") +
+  theme_light()
+
+```
+
+<br>
+
+
+#### Some initial boxplots of the outcome MACE per admission:
+
+```{r}
+# All patients
+admsubjcomplete %>%
+  ggplot(aes(as.factor(derm),maceperadm)) +
+  geom_boxplot() +
+  scale_y_continuous(trans = "log10") +
+  theme_minimal()
+
+# Derm patients only
+dermptscomplete %>%
+  ggplot(aes(as.factor(psor),maceperadm)) +
+  geom_boxplot() +
+  scale_y_continuous(trans = "log10") +
+  theme_minimal()
+
+dermptscomplete %>%
+  ggplot(aes(as.factor(hid),maceperadm)) +
+  geom_boxplot() +
+  scale_y_continuous(trans = "log10") +
+  theme_economist_white()
+
+dermptscomplete %>%
+  ggplot(aes(as.factor(vit),maceperadm)) +
+  geom_boxplot() +
+  scale_y_continuous(trans = "log10") +
+  theme_economist_white()
+
+dermptscomplete %>%
+  ggplot(aes(as.factor(alop),maceperadm)) +
+  geom_boxplot() +
+  scale_y_continuous(trans = "log10") +
+  theme_economist_white()
+
+dermptscomplete %>%
+  ggplot(aes(as.factor(atop),maceperadm)) +
+  geom_boxplot() +
+  scale_y_continuous(trans = "log10") +
+  theme_economist_white()
+```
+
+
+
+*Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.*
+
+<br>
+
+
+<br>
+
+
+<br>
+
+
+
+## Logistic regression models
+#### Assessing the impact of CISD conditions on our outcome
+
+First, we will take the whole population and assess for the impact of having dermatologic conditions on the primary outcome
+```{r}
+# Treating CISD conditions as a whole:
+glmmaceall_derm <- glm(mace ~ age_cat + gender + ethnicity + language + admission_location + insurance + marital_status + derm + mi + chf + hiv + pvd + cva + copd + rheum + malig + miliv + livmodsev + dm, data = admsubjcomplete, family = "binomial")
+tab <- cbind(round(exp(summary(glmmaceall_derm)$coefficients[,1]),3),round(exp(confint.default(glmmaceall_derm))[,1],3),round(exp(confint.default(glmmaceall_derm))[,2],3),round((summary(glmmaceall_derm)$coefficients[,4]),5))
+colnames(tab) <- c("Odds ratio for MACE","2.5% CI limit","97.5% CI limit","p-value")
+kable(tab)
+
+```
+
+Here, we can see that in addition to classical risk factors for MACE (such as age, male sex, prior MI, diagnosed CHF, and COPD), **having a CISD confers a 1.20-times higher odds of having a MACE during hospitalization**, holding the other covariates constant.
+
+
+```{r}
+# Treating CISD conditions individually:
+glmmaceall <- glm(mace ~ age_cat + gender + ethnicity + language + admission_location + insurance + marital_status + hid + vit + psor + atop + alop + mi + chf + hiv + pvd + cva + copd + rheum + malig + miliv + livmodsev + dm, data = admsubjcomplete, family = "binomial")
+tab <- cbind(round(exp(summary(glmmaceall)$coefficients[,1]),3),round(exp(confint.default(glmmaceall))[,1],3),round(exp(confint.default(glmmaceall))[,2],3),round((summary(glmmaceall)$coefficients[,4]),5))
+colnames(tab) <- c("Odds ratio for MACE","2.5% CI limit","97.5% CI limit","p-value")
+kable(tab)
+
+```
+
+Now examining the CISD conditions individually, we see that **psoriasis confers a 1.2-times higher odds of having a MACE during hospitalization, and the other CISD conditions do no have a strong association, and atopic dermatitis confers a 1.3-times higher odds**, holding all other covariates constant. This is an interesting association, and so now we will analyze the CISD population in more detail.
+
+<br>
+
+
+#### Assessing the risk factors for our outcome within the population of patients with CISD
+
+Now, focusing just on patients with CISD, we will again conduct logistic regression for the primary outcome
+```{r}
+# Logistic regression for the primary outcome
+glmmacederm <- glm(mace ~ age_cat + gender+ ethnicity + language + admission_location + insurance + marital_status + mi + chf + hiv + pvd + cva + copd + rheum + malig + miliv + livmodsev + dm, data = dermptscomplete, family = "binomial")
+tab <- cbind(round(exp(summary(glmmacederm)$coefficients[,1]),3),round(exp(confint.default(glmmacederm))[,1],3),round(exp(confint.default(glmmacederm))[,2],3),round((summary(glmmacederm)$coefficients[,4]),5))
+colnames(tab) <- c("Odds ratio for MACE","2.5% CI limit","97.5% CI limit","p-value")
+kable(tab)
+```
+
+Now, specifically analyzing the patients with CISD, we see that beyond the non-modifiable risk factors such as age, ethnicity, and male sex, **the risk factors for MACE are prior MI (OR of 1.85), CHF (OR 6.85), COPD (OR 4.43), and interestingly, rheumatologic conditions (OR 1.43)**, when holding the other covariates constant (including admission origin, marital status, Medicare insurance, etc.). Protective factors include prior stroke, peripheral vascular disease, diabetes, and HIV. 
+
+This has important implications for which CISD patients should be targeted for more aggressive monitoring when admitted to the hospital.
+
+<br>
+
+## Multinomial regression models
+
+First, creating a summarizing function for multinomial models (courtesy of Dr. Erin Lake, HSPH):
+```{r, echo=FALSE}
+summ.MNfit <- function(fit, digits=3){
+  s <- summary(fit)
+  for(i in 2:length(fit$lev))
+    {
+    ##
+    cat("\nLevel", fit$lev[i], "vs. Level", fit$lev[1], "\n")
+    ##
+    betaHat <- s$coefficients[(i-1),]
+    se <- s$standard.errors[(i-1),]
+    zStat <- betaHat / se
+    pval <- 2 * pnorm(abs(zStat), lower.tail=FALSE)
+    ##
+    RRR <- exp(betaHat)
+    RRR.lower <- exp(betaHat - qnorm(0.975)*se)
+    RRR.upper <- exp(betaHat + qnorm(0.975)*se)
+    ##
+    results <- cbind(betaHat, se, pval, RRR, RRR.lower, RRR.upper)
+    print(round(results, digits=digits))
+  }
+  }
+```
+
+
+#### Assessing the predictive risk factors among all patients for the components of the MACE outcome
+
+We will seek to establish which MACE components (acute HF, acute MI, cardiac arrest) are at risk in patients with CISD. 
+
+```{r}
+mnmod_all <- multinom(macemulti ~ derm + age_cat + gender+ ethnicity + language + admission_location + insurance + marital_status + mi + chf + hiv + pvd + cva + copd + rheum + malig + miliv + livmodsev + dm, data = admsubjcomplete)
+summ.MNfit(mnmod_all)
+```
+
+Here again, we see that in patients with CISD:
+
+1. The **risk of developing an MI (Level 1 vs 0 of the multinomial model) could be said to be associated with our CISD conditions, with a relative risk ratio (RRR) of 1.20**, but using an $\alpha$ threshold of 0.05, this would not be *strictly* significant with a *p*-value of 0.06. 
+
+2. The **risk of developing an acute heart failure (Level 2 vs 0 of the multinomial model) is, however, associated with the CISD conditions (Relative risk ratio [RRR] 1.20),** with a *p*-value less than 0.001.
+
+3. **It is notable, however, that having a CISD condition appears protective against having a cardiac arrest (Level 3 vs 0 of the multinomial model), with a RRR of 0.39,** *p* = 0.014.
+
+Now will again zero in on the population of hospitalized CISD patients to assess risk factors for particular subcomponents of the MACE outcome using multinomial regression.
+
+<br>
+
+
+#### Assessing the predictive risk factors among CISD patients for the components of the MACE outcome
+
+```{r}
+mnmod <- multinom(macemulti ~ age_cat + gender+ ethnicity + language + admission_location + insurance + marital_status + mi + chf + hiv + pvd + cva + copd + rheum + malig + miliv + livmodsev + dm, data = dermptscomplete)
+summ.MNfit(mnmod)
+```
+
+Here again, we see that in patients with CISD:
+
+1. The **risk of developing an MI (Level 1 vs 0 of the multinomial model) is associated with the *modifiable* risk factors of prior MI (Relative risk ratio [RRR] 8.93), CHF diagnosis (RRR 3.13), and COPD (RRR 1.96)**, using a *p*-value threshold of 0.05,. 
+2. The **risk of developing an acute heart failure (Level 2 vs 0 of the multinomial model) is associated with the *modifiable* risk factors of prior MI (Relative risk ratio [RRR] 1.51), CHF diagnosis (RRR 7.64), and COPD (RRR 4.95). Rheumatologic disorder is again a risk factor with a RRR of 1.41.** For this outcome subcomponent, peripheral vascular disease, stroke HIV, and diabetes are again protective
+3. The risk of sufffering cardiac arrest (Level 3 vs 0 of the multinomial model) is **not strongly predicted by any of the modifiable risk factors, but however is associated with the strong protective factors of diabetes and rheumatologic disorders.** 
+
+<br>
+
+Taken together, the findings from our regression models indicate that **patients with CISD should be targeted for aggresive monitoring, particularly patients with psoriasis or atopic dermatitis**. Moreover, not only we should  have particular suspicion in patients with CISD who have the standard risk factors such as MI, CHF, and COPD (especially for acute MI and acute heart failure), but **we should also raise our suspicion if concomitant rheumatologic disease is present**.
+
+We will investigate this further with use of machine learning models to more precisely predict the risk of MACE in patients with CISD.
+
+<br>
+
+
+
+## Developing machine learning models for prediction of MACE events particularly among hospitalized patients with Chronic Inflammatory Skin Diseases (CISD)
+
+### Random Forest, k Nearest Neighbors (knn) with k=4, knn with k=8, knn with k=12
+
+In a subgroup of patients with chronic inflammatory skin diseases (CISD), including psoriasis, hidradenitis suppuritiva/ acne inversa, atopic dermatitis, alopecia areata, and vitiligo, we aimed at identifying the best prediction model of in-hospital major adverse cardiac events (MACE) out of the following machine learning models: k-nearest neighbor (kNN) with k=4, k=8 and k=12, linear discriminant analysis (LDA), and random forest analysis. The predictor variables are the covariates of the primary model which were selected based on clinical reasoning. 
+
+<br>
+
+
+#### Data Wrangling
+```{r}
+# Load Data
+load("dermptscomplete.RData")
+
+# Select and reformat variables
+data <- dermptscomplete %>% dplyr::select(subject_id,mace, gender, age_cat, ethnicity, mi, chf, hiv, pvd, cva, copd, rheum,  livmodsev, malig, miliv, pleg, dm, numadm) %>% 
+  mutate(gender = as.factor(gender), 
+                        age_cat = as.factor(age_cat), 
+                        ethnicity = as.factor(ethnicity), 
+                        mi = as.factor(mi), 
+                        chf = as.factor(chf),
+                        hiv = as.factor(hiv), 
+                        pvd = as.factor(pvd), 
+                        cva = as.factor(cva), 
+                        copd = as.factor(copd), 
+                        rheum = as.factor(rheum), 
+                        livmodsev = as.factor(livmodsev),
+                        malig = as.factor(malig),
+                        miliv = as.factor(miliv),
+                        pleg = as.factor(pleg), 
+                        dm = as.factor(dm),
+                        numadm = as.numeric(numadm),
+                        mace = as.factor(mace)) 
+
+# Use complete cases 
+data <- data[complete.cases(data), ]
+```
+
+<br>
+
+
+#### Create Training and Test Set
+```{r}
+set.seed(1)
+
+x <- stratified(data, "mace", 0.7, keep.rownames = TRUE)
+train_set <- x %>% dplyr::select(-rn)
+train_index <- as.numeric(x$rn)
+test_set <- data[-train_index,]
+
+dim(train_set)
+```
+
+The training set had 5178 rows and 18 columns.
+
+<br>
+
+
+#### KNN Models
+##### KNN with k=4
+```{r}
+knn_fit <- knn3(mace~.,data = dplyr::select(train_set, mace, gender, age_cat, ethnicity, mi, chf, hiv, pvd, cva, copd, rheum, livmodsev, malig, miliv, pleg, dm, numadm), k = 4)
+f_hat_4 <- predict(knn_fit, newdata = test_set)[,2]
+tab_4 <- table(pred=round(f_hat_4), truth=test_set$mace)
+confusionMatrix(tab_4, positive = "1")
+```
+
+The accuracy of predicting in-hospital MACE is 0.89 (95% CI, 0.87, 0.90), which is the overall proportion that is predicted correctly. This can be considered good.
+
+Based on the confusion matrix, the sensitivity (true positives divided by the sum of true positives and false negatives) is 167/(167+175) = 0.49. Thus, the false-negative rate (type-II error) is 1-sensitivity = 0.51. This means, that 51% of those who actually die are wrongly predicted to not die.
+
+Based on the confusion matrix, the specificity (true negatives divided by the sum of true negatives and false positives) is 1799/(1799+78) = 0.96. Thus, the false-positive rate (type-I error) is 1-specificity = 0.04. This means that 4% of those who do not die are wrongly predicted to die.
+
+<br>
+
+
+##### KNN with k=8
+```{r}
+knn_fit <- knn3(mace~.,data = dplyr::select(train_set, mace, gender, age_cat, ethnicity, mi, chf, hiv, pvd, cva, copd, rheum, livmodsev, malig, miliv, pleg, dm, numadm), k = 8)
+f_hat_8 <- predict(knn_fit, newdata = test_set)[,2]
+tab_8 <- table(pred=round(f_hat_8), truth=test_set$mace)
+confusionMatrix(tab_8, positive = "1")
+```
+
+The accuracy of predicting in-hospital MACE is 0.88 (95% CI, 0.86, 0.89), which is the overall proportion that is predicted correctly. This can be considered good.
+
+Based on the confusion matrix, the sensitivity (true positives divided by the sum of true positives and false negatives) is 132/(132+210) = 0.39. Thus, the false-negative rate (type-II error) is 1-sensitivity = 0.61. This means, that 61% of those who actually die are wrongly predicted to not die.
+
+Based on the confusion matrix, the specificity (true negatives divided by the sum of true negatives and false positives) is 1813/(1813+64) = 0.97. Thus, the false-positive rate (type-I error) is 1-specificity = 0.03. This means that 3% of those who do not die are wrongly predicted to die.
+
+
+<br>
+
+
+##### KNN with k=12
+```{r}
+knn_fit <- knn3(mace~.,data = dplyr::select(train_set, mace, gender, age_cat, ethnicity, mi, chf, hiv, pvd, cva, copd, rheum, livmodsev, malig, miliv, pleg, dm, numadm), k =12)
+f_hat_12 <- predict(knn_fit, newdata = test_set)[,2]
+tab_12 <- table(pred=round(f_hat_12), truth=test_set$mace)
+confusionMatrix(tab_12, positive = "1")
+```
+
+The accuracy of predicting in-hospital MACE is 0.87 (95% CI, 0.86, 0.88), which is the overall proportion that is predicted correctly. This can be considered good.
+
+Based on the confusion matrix, the sensitivity (true positives divided by the sum of true positives and false negatives) is 108/(108+234) = 0.32. Thus, the false-negative rate (type-II error) is 1-sensitivity = 0.68. This means, that 68% of those who actually die are wrongly predicted to not die.
+
+Based on the confusion matrix, the specificity (true negatives divided by the sum of true negatives and false positives) is 1823/(1823+54) = 0.97. Thus, the false-positive rate (type-I error) is 1-specificity = 0.03. This means that 3% of those who do not die are wrongly predicted to die.
+
+
+<br>
+
+
+#### lda
+```{r}
+set.seed(1)
+
+lda_fit <- lda(mace ~ gender + age_cat + ethnicity + mi + chf + hiv + pvd + cva + copd + rheum + livmodsev + malig + miliv + pleg + dm + numadm, data = train_set)
+
+p_hat_lda <- predict(lda_fit, newdata = test_set)$posterior[,2]
+
+y_hat_lda <- factor(ifelse(p_hat_lda > 0.5, 1, 0))
+
+confusionMatrix(data = as.factor(y_hat_lda), reference = test_set$mace, positive = "1")
+```
+
+The accuracy of predicting in-hospital MACE is 0.85 (95% CI, 0.84, 0.86), which is the overall proportion that is predicted correctly. This can be considered good.
+
+Based on the confusion matrix, the sensitivity (true positives divided by the sum of true positives and false negatives) is 148/(148+194) = 0.43. Thus, the false-negative rate (type-II error) is 1-sensitivity = 0.57. This means, that 57% of those who actually die are wrongly predicted to not die.
+
+Based on the confusion matrix, the specificity (true negatives divided by the sum of true negatives and false positives) is 1737/(1737+140) = 0.93. Thus, the false-positive rate (type-I error) is 1-specificity = 0.07. This means that 7% of those who do not die are wrongly predicted to die.
+
+<br>
+
+
+#### Random Forrest
+```{r warning = FALSE}
+RNGkind(sample.kind = "Rounding")
+set.seed(1)
+
+forest_fit <- randomForest(mace ~ gender + age_cat + ethnicity + mi + chf + hiv + pvd + cva + copd + rheum + livmodsev + malig + miliv + pleg + dm + numadm, data = train_set)
+
+p_hat_forest <- predict(forest_fit, newdata = test_set, type = "prob")[, 2]
+
+y_hat_forest <- factor(ifelse(p_hat_forest > 0.5, 1, 0))
+
+confusionMatrix(data = as.factor(y_hat_forest), reference = test_set$mace, positive = "1")
+```
+
+The accuracy of predicting in-hospital MACE is 0.88 (95% CI, 0.87, 0.90), which is the overall proportion that is predicted correctly. This can be considered good.
+
+Based on the confusion matrix, the sensitivity (true positives divided by the sum of true positives and false negatives) is 178/(178+164) = 0.52. Thus, the false-negative rate (type-II error) is 1-sensitivity = 0.48. This means, that 48% of those who actually die are wrongly predicted to not die.
+
+Based on the confusion matrix, the specificity (true negatives divided by the sum of true negatives and false positives) is 1782/(1782+95) = 0.95. Thus, the false-positive rate (type-I error) is 1-specificity = 0.05. This means that 5% of those who do not die are wrongly predicted to die.
+
+<br>
+
+
+#### ROC Curves
+```{r}
+knn_4_roc <- roc(test_set$mace, f_hat_4)
+knn_8_roc <- roc(test_set$mace, f_hat_8)
+knn_12_roc <- roc(test_set$mace, f_hat_12)
+roc_lda <- roc(test_set$mace, p_hat_lda)
+roc_forest <- roc(test_set$mace, p_hat_forest)
+
+ggroc(list("kNN, k=4" = knn_4_roc, "kNN, k=8" = knn_8_roc, "kNN, k=12" = knn_12_roc, "LDA" = roc_lda, "Random Forest" = roc_forest), legacy.axes = F)+
+  geom_segment(aes(x = 1, xend = 0, y = 0, yend = 1), color = "black", linetype = "dashed") +
+  ylab("Sensitivity") +
+  xlab("Specificity") +
+  labs(color = "Models") + 
+  ggtitle("ROC Curves for 5 Models") +
+  theme_bw() +
+  theme(plot.title = element_text(hjust = 0.5))
+```
+
+<br>
+
+
+#### AUCs
+
+```{r}
+auc(knn_4_roc)
+auc(knn_8_roc)
+auc(knn_12_roc)
+auc(roc_lda)
+auc(roc_forest)
+```
+
+For the prediction of in-hospital MACE in patients with CISD, the best model in terms of overall accuracy and the receiver operating characteristic curve (AUROC) was the Random Forest (accuracy = 0.88 and AUC=0.89) compared to kNN with various k, and LDA. The AUC can be seen as a "trade-off" measure between sensitivity and the false positive rate (1-specificity). Hence, the Random Forest appears to be overall the best compromise between a relatively high sensitivity and at the same time a relatively small false positive rate, compared to the other to models. In conclusion, the Random Forest performed the best.
+
+<br>
+
+#### Gini Index for the covariates/features of the best model
+
+```{r}
+variable_importance <- importance(forest_fit)
+
+tmp <- tibble(feature = rownames(variable_importance),
+              Gini = variable_importance[, 1]) %>%
+              arrange(desc(Gini))
+
+kable(tmp[1:10, ])
+```
+
+The top 3 most predictive features of in-hospital MACE were congestive heart failure, number of admissions prior to index admission, and chronic obstructive pulmonary disease (COPD). These results show that CISD patients with these specific comorbidities merit more intensive monitoring while hospitalized.
